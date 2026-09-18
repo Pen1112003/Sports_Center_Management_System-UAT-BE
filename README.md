@@ -11,7 +11,7 @@ npm run db:seed
 npm run dev
 ```
 
-The API runs on `http://localhost:3000`. SQLite uses `file:./data/app.db`; access tokens last 60 minutes and refresh tokens are rotated in an HttpOnly cookie.
+The API runs on `http://localhost:3000`. Swagger UI runs at `http://localhost:3000/api-docs`, and the OpenAPI JSON is available at `http://localhost:3000/api-docs.json`. SQLite uses `file:./data/app.db`; access tokens last 60 minutes and refresh tokens are rotated in an HttpOnly cookie.
 
 Demo account: `manager@sports-center.local` / `ChangeMe123!`
 
@@ -23,3 +23,5 @@ npm run build
 ```
 
 API endpoints for FR-001: `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout`, `GET /api/auth/me`.
+
+FR-002 endpoints are documented in Swagger: `GET /api/classes` and `POST /api/class-registrations`.
