@@ -28,6 +28,12 @@ enum RegistrationStatus {
   CANCELLED
 }
 
+enum PackageStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
 model Role {
   id        Int      @id @default(autoincrement())
   name      String   @unique
@@ -65,16 +71,38 @@ model RefreshToken {
   @@index([userId, expiresAt])
 }
 
+model MembershipPackage {
+  id           Int           @id @default(autoincrement())
+  code         String        @unique
+  name         String
+  description  String?
+  price        Int
+  durationDays Int
+  sessionLimit Int?
+  sportType    String
+  benefits     String?
+  isBestSeller Boolean       @default(false)
+  status       PackageStatus @default(ACTIVE)
+  memberships  Membership[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([status, sportType])
+}
+
 model Membership {
   id        Int              @id @default(autoincrement())
   userId    Int
+  packageId Int?
   startDate DateTime
   endDate   DateTime
   status    MembershipStatus @default(ACTIVE)
   user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  package   MembershipPackage? @relation(fields: [packageId], references: [id], onDelete: SetNull)
   createdAt DateTime         @default(now())
 
   @@index([userId, status, endDate])
+  @@index([packageId])
 }
 
 model ClassSchedule {

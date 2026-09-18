@@ -62,6 +62,54 @@ async function main() {
     })
   }
   await prisma.classRegistration.deleteMany({ where: { userId: member.id, classScheduleId: classSchedule.id } })
+
+  // FR-003 Membership Packages Seed Data
+  const packages = [
+    {
+      code: 'PKG-GYM-1M',
+      name: 'Gói Gym Tiêu Chuẩn 1 Tháng',
+      description: 'Gói tập Gym cơ bản cho người mới bắt đầu, truy cập tự do toàn bộ thiết bị tạ và máy cardio.',
+      price: 500000,
+      durationDays: 30,
+      sessionLimit: null,
+      sportType: 'Gym',
+      benefits: JSON.stringify(['Tập luyện máy Gym không giới hạn', 'Tủ đồ thông minh miễn phí', 'Nước uống điện giải']),
+      isBestSeller: false,
+      status: 'ACTIVE' as const,
+    },
+    {
+      code: 'PKG-YOGA-3M',
+      name: 'Gói Yoga Chuyên Sâu 3 Tháng',
+      description: 'Luyện tập Yoga cùng Master Ấn Độ, cải thiện độ dẻo dai và giải tỏa căng thẳng.',
+      price: 1800000,
+      durationDays: 90,
+      sessionLimit: 36,
+      sportType: 'Yoga',
+      benefits: JSON.stringify(['Thảm tập cao cấp kháng khuẩn', 'Lớp Hatha & Vinyasa Yoga', 'Trà thảo mộc sau buổi tập']),
+      isBestSeller: true,
+      status: 'ACTIVE' as const,
+    },
+    {
+      code: 'PKG-VIP-1Y',
+      name: 'Gói VIP Full-Access 1 Năm',
+      description: 'Đặc quyền thượng lưu tập luyện không giới hạn mọi bộ môn tại tất cả chi nhánh.',
+      price: 6000000,
+      durationDays: 365,
+      sessionLimit: null,
+      sportType: 'Toàn diện',
+      benefits: JSON.stringify(['Toàn quyền truy cập mọi bộ môn', 'Phòng xông hơi đá muối Himalaya', 'Đặt chỗ lớp ưu tiên', '3 buổi PT cá nhân 1-1']),
+      isBestSeller: true,
+      status: 'ACTIVE' as const,
+    },
+  ]
+
+  for (const pkg of packages) {
+    await prisma.membershipPackage.upsert({
+      where: { code: pkg.code },
+      update: pkg,
+      create: pkg,
+    })
+  }
 }
 
 main().finally(() => prisma.$disconnect())
