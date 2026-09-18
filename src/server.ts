@@ -8,6 +8,13 @@ import { config } from './config.js'
 import { findUser, issueSession, REFRESH_COOKIE, revokeRefreshToken, rotateRefreshToken, verifyPassword } from './auth.js'
 import { prisma } from './prisma.js'
 import { openapiDocument } from './openapi.js'
+import {
+  createPackageSchema,
+  formatPackage,
+  requireManager,
+  serializeBenefits,
+  updatePackageSchema,
+} from './packages.js'
 
 const app = express()
 app.use(express.json())
@@ -18,7 +25,7 @@ app.use((request, response, next) => {
   response.setHeader('Access-Control-Allow-Origin', config.frontendOrigin)
   response.setHeader('Access-Control-Allow-Credentials', 'true')
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-  response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+  response.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
   if (request.method === 'OPTIONS') return response.sendStatus(204)
   next()
 })
@@ -150,6 +157,237 @@ app.get('/api/auth/me', (request, response) => {
   } catch {
     return response.status(401).json({ code: 'INVALID_ACCESS_TOKEN', message: 'Access token không hợp lệ hoặc đã hết hạn' })
   }
+})
+
+// FR-003 Membership Package Catalog Endpoints
+
+app.get('/api/packages', async (request, response) => {
+  const authorization = request.header('authorization')
+  let isManager = false
+  if (authorization?.startsWith('Bearer ')) {
+    try {
+      const payload = jwt.verify(authorization.slice(7), config.accessSecret) as jwt.JwtPayload & { role?: string }
+      if (payload.role === 'CENTER_MANAGER') isManager = true
+    } catch {
+      // ignore token error for public package listing
+    }
+  }
+
+  const { status, sportType, search } = request.query
+  const where: Record<string, unknown> = {}
+
+  if (typeof status === 'string' && status !== 'ALL') {
+    where.status = status
+  } else if (!isManager) {
+    // Non-managers only see ACTIVE packages
+    where.status = 'ACTIVE'
+  } else if (status !== 'ALL') {
+    // Manager default shows ACTIVE and INACTIVE (not ARCHIVED) unless specified
+    where.status = { in: ['ACTIVE', 'INACTIVE'] }
+  }
+
+  if (typeof sportType === 'string' && sportType.trim()) {
+    where.sportType = sportType.trim()
+  }
+
+  if (typeof search === 'string' && search.trim()) {
+    const query = search.trim()
+    where.OR = [
+      { name: { contains: query } },
+      { code: { contains: query } },
+      { description: { contains: query } },
+    ]
+  }
+
+  const packages = await prisma.membershipPackage.findMany({
+    where,
+    orderBy: [{ isBestSeller: 'desc' }, { createdAt: 'desc' }],
+    include: { _count: { select: { memberships: true } } },
+  })
+
+  return response.json(packages.map(formatPackage))
+})
+
+app.get('/api/packages/:id', async (request, response) => {
+  const id = Number(request.params.id)
+  if (isNaN(id) || id <= 0) {
+    return response.status(400).json({ code: 'VALIDATION_ERROR', message: 'ID gói tập không hợp lệ' })
+  }
+
+  const pkg = await prisma.membershipPackage.findUnique({
+    where: { id },
+    include: { _count: { select: { memberships: true } } },
+  })
+
+  if (!pkg) {
+    return response.status(404).json({ code: 'PACKAGE_NOT_FOUND', message: 'Không tìm thấy gói tập yêu cầu' })
+  }
+
+  return response.json(formatPackage(pkg))
+})
+
+app.post('/api/packages', async (request, response) => {
+  const managerId = requireManager(request, response)
+  if (!managerId) return
+
+  const parsed = createPackageSchema.safeParse(request.body)
+  if (!parsed.success) {
+    return response.status(400).json({
+      code: 'VALIDATION_ERROR',
+      message: 'Dữ liệu cấu hình gói tập không hợp lệ',
+      details: parsed.error.flatten(),
+    })
+  }
+
+  const existing = await prisma.membershipPackage.findUnique({
+    where: { code: parsed.data.code },
+  })
+  if (existing) {
+    return response.status(409).json({
+      code: 'PACKAGE_CODE_EXISTS',
+      message: `Mã gói tập '${parsed.data.code}' đã tồn tại trong hệ thống`,
+    })
+  }
+
+  const created = await prisma.membershipPackage.create({
+    data: {
+      code: parsed.data.code,
+      name: parsed.data.name,
+      description: parsed.data.description,
+      price: parsed.data.price,
+      durationDays: parsed.data.durationDays,
+      sessionLimit: parsed.data.sessionLimit,
+      sportType: parsed.data.sportType,
+      benefits: serializeBenefits(parsed.data.benefits),
+      isBestSeller: parsed.data.isBestSeller ?? false,
+      status: 'ACTIVE',
+    },
+    include: { _count: { select: { memberships: true } } },
+  })
+
+  return response.status(201).json(formatPackage(created))
+})
+
+app.patch('/api/packages/:id', async (request, response) => {
+  const managerId = requireManager(request, response)
+  if (!managerId) return
+
+  const id = Number(request.params.id)
+  if (isNaN(id) || id <= 0) {
+    return response.status(400).json({ code: 'VALIDATION_ERROR', message: 'ID gói tập không hợp lệ' })
+  }
+
+  const parsed = updatePackageSchema.safeParse(request.body)
+  if (!parsed.success) {
+    return response.status(400).json({
+      code: 'VALIDATION_ERROR',
+      message: 'Dữ liệu cập nhật không hợp lệ',
+      details: parsed.error.flatten(),
+    })
+  }
+
+  const existing = await prisma.membershipPackage.findUnique({ where: { id } })
+  if (!existing) {
+    return response.status(404).json({ code: 'PACKAGE_NOT_FOUND', message: 'Không tìm thấy gói tập cần cập nhật' })
+  }
+
+  const data: Record<string, unknown> = {}
+  if (parsed.data.name !== undefined) data.name = parsed.data.name
+  if (parsed.data.description !== undefined) data.description = parsed.data.description
+  if (parsed.data.price !== undefined) data.price = parsed.data.price
+  if (parsed.data.durationDays !== undefined) data.durationDays = parsed.data.durationDays
+  if (parsed.data.sessionLimit !== undefined) data.sessionLimit = parsed.data.sessionLimit
+  if (parsed.data.sportType !== undefined) data.sportType = parsed.data.sportType
+  if (parsed.data.benefits !== undefined) data.benefits = serializeBenefits(parsed.data.benefits)
+  if (parsed.data.isBestSeller !== undefined) data.isBestSeller = parsed.data.isBestSeller
+  if (parsed.data.status !== undefined) data.status = parsed.data.status
+
+  const updated = await prisma.membershipPackage.update({
+    where: { id },
+    data,
+    include: { _count: { select: { memberships: true } } },
+  })
+
+  return response.json(formatPackage(updated))
+})
+
+app.post('/api/packages/:id/activate', async (request, response) => {
+  const managerId = requireManager(request, response)
+  if (!managerId) return
+
+  const id = Number(request.params.id)
+  if (isNaN(id) || id <= 0) {
+    return response.status(400).json({ code: 'VALIDATION_ERROR', message: 'ID gói tập không hợp lệ' })
+  }
+
+  const existing = await prisma.membershipPackage.findUnique({ where: { id } })
+  if (!existing) {
+    return response.status(404).json({ code: 'PACKAGE_NOT_FOUND', message: 'Không tìm thấy gói tập' })
+  }
+
+  const updated = await prisma.membershipPackage.update({
+    where: { id },
+    data: { status: 'ACTIVE' },
+    include: { _count: { select: { memberships: true } } },
+  })
+
+  return response.json(formatPackage(updated))
+})
+
+app.post('/api/packages/:id/deactivate', async (request, response) => {
+  const managerId = requireManager(request, response)
+  if (!managerId) return
+
+  const id = Number(request.params.id)
+  if (isNaN(id) || id <= 0) {
+    return response.status(400).json({ code: 'VALIDATION_ERROR', message: 'ID gói tập không hợp lệ' })
+  }
+
+  const existing = await prisma.membershipPackage.findUnique({ where: { id } })
+  if (!existing) {
+    return response.status(404).json({ code: 'PACKAGE_NOT_FOUND', message: 'Không tìm thấy gói tập' })
+  }
+
+  const updated = await prisma.membershipPackage.update({
+    where: { id },
+    data: { status: 'INACTIVE' },
+    include: { _count: { select: { memberships: true } } },
+  })
+
+  return response.json(formatPackage(updated))
+})
+
+app.delete('/api/packages/:id', async (request, response) => {
+  const managerId = requireManager(request, response)
+  if (!managerId) return
+
+  const id = Number(request.params.id)
+  if (isNaN(id) || id <= 0) {
+    return response.status(400).json({ code: 'VALIDATION_ERROR', message: 'ID gói tập không hợp lệ' })
+  }
+
+  const existing = await prisma.membershipPackage.findUnique({
+    where: { id },
+    include: { _count: { select: { memberships: true } } },
+  })
+  if (!existing) {
+    return response.status(404).json({ code: 'PACKAGE_NOT_FOUND', message: 'Không tìm thấy gói tập' })
+  }
+
+  if (existing._count.memberships > 0) {
+    return response.status(409).json({
+      code: 'PACKAGE_IN_USE',
+      message: 'Không thể xóa gói tập đã phát sinh thẻ hội viên sử dụng',
+      details: { activeSubscribers: existing._count.memberships },
+    })
+  }
+
+  await prisma.membershipPackage.update({
+    where: { id },
+    data: { status: 'ARCHIVED' },
+  })
+
+  return response.json({ message: 'Đã lưu trữ gói tập thành công', id })
 })
 
 export { app }
